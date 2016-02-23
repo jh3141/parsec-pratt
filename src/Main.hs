@@ -10,6 +10,8 @@ data Expr =
     PrefixOp String Expr |
     IntValue Integer 
     deriving Show
+    
+data OperatorPrecedence = LAssoc Int | RAssoc Int
 
 pPrint :: Expr -> PP.Doc
 pPrint (BinOp l op r) =  PP.vcat [PP.text $ "(BinOp " ++ op,
@@ -31,24 +33,24 @@ parseIntValue = wsopt (many1 digit) >>= \ x -> return (IntValue (read x))
 
 -- parse an operator
 operator :: StringParser String
-operator = many1 (oneOf "<>:@~\\/|!Â£$%^&*-_=+")
+operator = many1 (oneOf "<>:@~\\/|!£$%^&*-_=+")
 
 -- operator precedence values
-operatorPrecedence :: String -> Int
-operatorPrecedence "-" = 5
-operatorPrecedence "+" = 5
-operatorPrecedence "|" = 4
-operatorPrecedence "*" = 7
-operatorPrecedence "&" = 6
-operatorPrecedence "/" = 7
-operatorPrecedence "<" = 3
-operatorPrecedence ">" = 3
-operatorPrecedence "<=" = 3
-operatorPrecedence ">=" = 3
-operatorPrecedence "||" = 1
-operatorPrecedence "&&" = 2
-operatorPrecedence "^" = 9
-operatorPrecedence _   = 4
+operatorPrecedence :: String -> OperatorPrecedence
+operatorPrecedence "-" = LAssoc 5
+operatorPrecedence "+" = LAssoc 5
+operatorPrecedence "|" = LAssoc 4
+operatorPrecedence "*" = LAssoc 7
+operatorPrecedence "&" = LAssoc 6
+operatorPrecedence "/" = LAssoc 7
+operatorPrecedence "<" = LAssoc 3
+operatorPrecedence ">" = LAssoc 3
+operatorPrecedence "<=" = LAssoc 3
+operatorPrecedence ">=" = LAssoc 3
+operatorPrecedence "||" = LAssoc 1
+operatorPrecedence "&&" = LAssoc 2
+operatorPrecedence "^" = RAssoc 9
+operatorPrecedence _   = LAssoc 4
 
 -- parse an operator only if the next operator has at least minimum precedence
 -- (will usually be used with 'try', so error message caused on failure should never appear in output)
@@ -56,8 +58,11 @@ operatorWithMinimumPrecedence :: Int -> StringParser String
 operatorWithMinimumPrecedence min = do
     op <- wsopt operator
     case operatorPrecedence op of
-        precedence | precedence >= min -> return op
-        _                              -> fail "Precedence below minimum expected"
+        LAssoc precedence 
+           | precedence >= min -> return op
+        RAssoc precedence 
+           | precedence >= min -> return op
+        _                      -> fail "Precedence below minimum expected"
 
 
 -- parse <operator> <expression>
@@ -78,15 +83,19 @@ parseInfix :: Int -> Expr -> ExprParser
 parseInfix precedence lhs = do
     maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
     case maybeOp of
-        Just op   -> parseExprWithMinimumPrecedence (operatorPrecedence op + 1) >>= \ rhs -> parseInfix precedence (BinOp lhs op rhs)
+        Just op   -> parseExprWithMinimumPrecedence (operatorPrecedence op) >>= \ rhs -> parseInfix precedence (BinOp lhs op rhs)
         Nothing   -> return lhs
 
 -- parse expressions
 parseExpr :: ExprParser
-parseExpr = parseExprWithMinimumPrecedence 0
+parseExpr = parseExprWithMinimumPrecedence (LAssoc 0)
 
-parseExprWithMinimumPrecedence :: Int -> ExprParser
-parseExprWithMinimumPrecedence precedence = optional spaces >> (parsePrefixOp <|> parseIntValue <|> parseBracketExpr) >>= parseInfix precedence
+parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
+parseExprWithMinimumPrecedence precedence = 
+	optional spaces >> (parsePrefixOp <|> parseIntValue <|> parseBracketExpr) >>= parseInfix (precedenceValue precedence)
+	where
+		precedenceValue (LAssoc n) = n + 1
+		precedenceValue (RAssoc n) = n 
 
 -- main - parse standard input
 main::IO()
