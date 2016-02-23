@@ -3,12 +3,20 @@ module Main where
 import Text.Parsec
 import Control.Applicative ((<*))       -- Applicative has several operators that conflict with 
                                         -- the Parsec combinators, but Parsec lacks this one.
+import qualified Text.PrettyPrint as PP
 
 data Expr =
     BinOp Expr String Expr |
     PrefixOp String Expr |
     IntValue Integer 
     deriving Show
+
+pPrint :: Expr -> PP.Doc
+pPrint (BinOp l op r) =  PP.vcat [PP.text $ "(BinOp " ++ op,
+                      PP.nest 4 $ pPrint l,
+                      PP.nest 4 $ pPrint r, 
+                      PP.text ")"]
+pPrint x = PP.text $ show x
 
 type StringParser r = Parsec String () r
 type ExprParser = StringParser Expr
@@ -23,7 +31,7 @@ parseIntValue = wsopt (many1 digit) >>= \ x -> return (IntValue (read x))
 
 -- parse an operator
 operator :: StringParser String
-operator = many1 (oneOf "<>:@~\\/|!£$%^&*-_=+")
+operator = many1 (oneOf "<>:@~\\/|!Â£$%^&*-_=+")
 
 -- operator precedence values
 operatorPrecedence :: String -> Int
@@ -70,7 +78,7 @@ parseInfix :: Int -> Expr -> ExprParser
 parseInfix precedence lhs = do
     maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
     case maybeOp of
-        Just op   -> parseExprWithMinimumPrecedence (operatorPrecedence op) >>= \ rhs -> parseInfix precedence (BinOp lhs op rhs)
+        Just op   -> parseExprWithMinimumPrecedence (operatorPrecedence op + 1) >>= \ rhs -> parseInfix precedence (BinOp lhs op rhs)
         Nothing   -> return lhs
 
 -- parse expressions
@@ -80,6 +88,13 @@ parseExpr = parseExprWithMinimumPrecedence 0
 parseExprWithMinimumPrecedence :: Int -> ExprParser
 parseExprWithMinimumPrecedence precedence = optional spaces >> (parsePrefixOp <|> parseIntValue <|> parseBracketExpr) >>= parseInfix precedence
 
--- main - not particularly useful yet. use "parseTest parseExpr string" to test parsing in GHCi. 
+-- main - parse standard input
 main::IO()
-main = undefined
+main = do
+   input <- getContents
+   putStrLn (parseToText input)
+
+parseToText :: String -> String
+parseToText input = case (parse parseExpr "input" input) of
+       Left error -> show error
+       Right expr -> PP.render $ pPrint expr
