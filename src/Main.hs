@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 module Main where
 
 --------------------------------------------------------------------------------
@@ -28,14 +30,28 @@ type StringParser r = Parsec String () r
 type ExprParser = StringParser Expr
 
 data OperatorPrecedence = LAssoc Int | RAssoc Int
-					      deriving (Show, Eq)
+                          deriving (Show, Eq)
 
 data OperatorInfo = OperatorInfo String OperatorPrecedence LeftDenotation
-					deriving Show
+                
 
--- a LeftDenotation is a function for producing a parser that binds to a 
--- left hand term
-type LeftDenotation = OperatorInfo -> Expr -> ExprParser
+-- a NullDenotation is a parser for terms that do not have a left hand 
+-- term to bind to. It receives a parser as an argument that can be
+-- used to recursively parse an expression stopping when an
+-- operator of a given precedence or greater is encountered
+type PrecedenceParser = OperatorPrecedence -> ExprParser
+type NullDenotation = PrecedenceParser -> ExprParser
+
+ -- a LeftDenotation is a function for producing a parser that binds to a 
+-- left hand term. It also receives a function for parsing additional 
+-- sub-expression up to a given precedence (which should usually
+-- be the precedence of the operator)
+type LeftDenotation = OperatorInfo -> Expr -> PrecedenceParser -> ExprParser 
+-- type of parser transformers that can be used to remove extraneous text
+-- (eg removing whitespace and/or comments) before a useful token occurs
+type ContentStripper = forall t. StringParser t -> StringParser t
+
+type OperatorParser = StringParser String
 
 --------------------------------------------------------------------------------
 -- utility functions for formatted output
@@ -47,7 +63,7 @@ pPrint (BinOp l op r) =  PP.vcat [PP.text $ "(BinOp " ++ op,
                       PP.nest 4 $ pPrint r, 
                       PP.text ")"]
 pPrint (IfThenElse c t f) =  PP.vcat [PP.text $ "(If",
-					  PP.nest 4 $ pPrint c,
+                      PP.nest 4 $ pPrint c,
                       PP.nest 4 $ pPrint t,
                       PP.nest 4 $ pPrint f, 
                       PP.text ")"]
@@ -63,7 +79,7 @@ parseToText parser input = case (parse parser "input" input) of
 --------------------------------------------------------------------------------       
 
 -- apply optional trailing whitespace to a parser
-wsopt :: StringParser t -> StringParser t
+wsopt :: ContentStripper
 wsopt p = p <* optional spaces
 
 -- parse an integer value (with optional trailing whitespace)
@@ -71,34 +87,34 @@ parseIntValue :: ExprParser
 parseIntValue = wsopt (many1 digit) >>= \ x -> return (IntValue (read x))
 
 -- parse an operator symbol
-operator :: StringParser String
-operator = try (string "ifTrue") <|> many1 (oneOf "<>:@~\\/|!£$%^&*-_=+")
+operator :: OperatorParser
+operator = try (string "ifTrue") <|> many1 (oneOf "<>:@~\\/|!Â£$%^&*-_=+")
 
 -- operator data
+operatorList :: [OperatorInfo]
+operatorList = [
+    OperatorInfo "-" (LAssoc 50) parseStdOp,
+    OperatorInfo "+" (LAssoc 50) parseStdOp,
+    OperatorInfo "|" (LAssoc 40) parseStdOp,
+    OperatorInfo "*" (LAssoc 70) parseStdOp,
+    OperatorInfo "&" (LAssoc 60) parseStdOp,
+    OperatorInfo "/" (LAssoc 70) parseStdOp,
+    OperatorInfo "<" (LAssoc 30) parseStdOp,
+    OperatorInfo ">" (LAssoc 30) parseStdOp,
+    OperatorInfo "<=" (LAssoc 30) parseStdOp,
+    OperatorInfo ">=" (LAssoc 30) parseStdOp,
+    OperatorInfo "||" (LAssoc 10) parseStdOp,
+    OperatorInfo "&&" (LAssoc 20) parseStdOp,
+    OperatorInfo "^" (RAssoc 90) parseStdOp,
+    OperatorInfo "ifTrue" (RAssoc 5) parseIfOp]
+
 operatorInfoPrecedence :: OperatorInfo -> OperatorPrecedence
 operatorInfoPrecedence (OperatorInfo _ p _) = p
 
-operatorList :: [OperatorInfo]
-operatorList = [
-	OperatorInfo "-" (LAssoc 50) parseStdOp,
-	OperatorInfo "+" (LAssoc 50) parseStdOp,
-	OperatorInfo "|" (LAssoc 40) parseStdOp,
-	OperatorInfo "*" (LAssoc 70) parseStdOp,
-	OperatorInfo "&" (LAssoc 60) parseStdOp,
-	OperatorInfo "/" (LAssoc 70) parseStdOp,
-	OperatorInfo "<" (LAssoc 30) parseStdOp,
-	OperatorInfo ">" (LAssoc 30) parseStdOp,
-	OperatorInfo "<=" (LAssoc 30) parseStdOp,
-	OperatorInfo ">=" (LAssoc 30) parseStdOp,
-	OperatorInfo "||" (LAssoc 10) parseStdOp,
-	OperatorInfo "&&" (LAssoc 20) parseStdOp,
-	OperatorInfo "^" (RAssoc 90) parseStdOp,
-	OperatorInfo "ifTrue" (RAssoc 5) parseIfOp]
-
 operatorMap :: Map.Map String OperatorInfo
 operatorMap = Map.fromList (map mkOpInfoTuple operatorList)
-	where
-		mkOpInfoTuple opInfo@(OperatorInfo name _ _) = (name, opInfo)
+    where
+        mkOpInfoTuple opInfo@(OperatorInfo name _ _) = (name, opInfo)
 
 operatorPrecedence :: String -> OperatorPrecedence
 operatorPrecedence name = operatorInfoPrecedence (operatorMap ! name)
@@ -118,64 +134,76 @@ operatorWithMinimumPrecedence min = do
 
 
 -- parse <operator> <expression>
-parsePrefixOp :: ExprParser
-parsePrefixOp = do
+parsePrefixOp :: NullDenotation
+parsePrefixOp pex = do
     op <- wsopt operator
-    rhs <- parseExpr
+    rhs <- parseTerm pex
     return $ PrefixOp op rhs
 
 -- parse '(' <expression> ')'
-parseBracketExpr :: ExprParser
-parseBracketExpr = between openBracket closeBracket parseExpr
+parseBracketExpr :: NullDenotation
+parseBracketExpr pex = between
+    openBracket closeBracket
+    (pex (LAssoc 0))
     where openBracket = wsopt (char '(')
           closeBracket = wsopt (char ')')
 
 
 -- parse a binary operator with standard semantics
 parseStdOp :: LeftDenotation
-parseStdOp (OperatorInfo name precedence _) lhs = do
-	rhs <- parseExprWithMinimumPrecedence (precedence)
-	return (BinOp lhs name rhs)
+parseStdOp (OperatorInfo name precedence _) lhs pex = do
+    rhs <- pex precedence
+    return (BinOp lhs name rhs)
 
 -- parse an if-then-else operator
 parseIfOp :: LeftDenotation
-parseIfOp (OperatorInfo name precedence _) condition = do
-	trueExpr <- parseExprWithMinimumPrecedence precedence
-	string "else"
-	falseExpr <- parseExprWithMinimumPrecedence precedence
-	return $ IfThenElse condition trueExpr falseExpr
-	
--- given an already parsed expression, parse <operator> <expression> that may 
--- optionally follow it
-parseInfix :: Int -> Expr -> ExprParser
-parseInfix precedence lhs = do
+parseIfOp (OperatorInfo name precedence _) condition pex = do
+    trueExpr <- pex precedence
+    string "else"
+    falseExpr <- pex precedence
+    return $ IfThenElse condition trueExpr falseExpr
+    
+
+-- parse terms
+parseTerm :: NullDenotation
+parseTerm pex = 
+    parsePrefixOp pex <|>
+    parseIntValue <|>
+    parseBracketExpr pex
+
+-- parse expressions
+
+ 
+ 
+buildPrattParser :: [OperatorInfo] -> ContentStripper -> OperatorParser -> NullDenotation -> ExprParser
+buildPrattParser operators strip operator nud  = parseExpr
+  where
+  parseExpr :: ExprParser
+  parseExpr = parseExprWithMinimumPrecedence (LAssoc 0)
+
+  parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
+  parseExprWithMinimumPrecedence precedence = 
+    optional spaces >> parseTerm parseExprWithMinimumPrecedence >>= parseInfix (precedenceValue precedence)
+    where
+        precedenceValue (LAssoc n) = n + 1
+        precedenceValue (RAssoc n) = n 
+ 
+   -- given an already parsed expression, parse <operator> <expression> that may 
+  -- optionally follow it
+  parseInfix :: Int -> Expr -> ExprParser
+  parseInfix precedence lhs = do
     maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
     case maybeOp of
         Just name       -> bindOperatorLeft name lhs >>= parseInfix precedence
         Nothing         -> return lhs
-
-bindOperatorLeft :: String -> Expr -> ExprParser
-bindOperatorLeft name lhs = 
-	case (Map.lookup name operatorMap) of
-    	Just opInfo@(OperatorInfo _ _ leftDenotation) -> 
-    		leftDenotation opInfo lhs
-    	Nothing -> error $ "Unknown operator \"" ++ name ++ "\""
-    	
--- parse terms
-parseTerm :: ExprParser
-parseTerm = parsePrefixOp <|> parseIntValue <|> parseBracketExpr
-
--- parse expressions
-parseExpr :: ExprParser
-parseExpr = parseExprWithMinimumPrecedence (LAssoc 0)
-
-parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
-parseExprWithMinimumPrecedence precedence = 
-	optional spaces >> parseTerm >>= parseInfix (precedenceValue precedence)
-	where
-		precedenceValue (LAssoc n) = n + 1
-		precedenceValue (RAssoc n) = n 
-
+    
+  bindOperatorLeft :: String -> Expr -> ExprParser
+  bindOperatorLeft name lhs = 
+        case (Map.lookup name operatorMap) of
+            Just opInfo@(OperatorInfo _ _ leftDenotation) -> 
+                 leftDenotation opInfo lhs parseExprWithMinimumPrecedence
+            Nothing -> error $ "Unknown operator \"" ++ name ++ "\""
+         
 --------------------------------------------------------------------------------
 -- main - parse standard input
 --------------------------------------------------------------------------------
@@ -183,4 +211,5 @@ parseExprWithMinimumPrecedence precedence =
 main::IO()
 main = do
    input <- getContents
-   putStrLn (parseToText parseExpr input)
+   putStrLn (parseToText (buildPrattParser operatorList wsopt operator parseTerm) input)
+   
