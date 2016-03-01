@@ -42,7 +42,7 @@ data OperatorInfo = OperatorInfo String OperatorPrecedence LeftDenotation
 type PrecedenceParser = OperatorPrecedence -> ExprParser
 type NullDenotation = PrecedenceParser -> ExprParser
 
- -- a LeftDenotation is a function for producing a parser that binds to a 
+-- a LeftDenotation is a function for producing a parser that binds to a 
 -- left hand term. It also receives a function for parsing additional 
 -- sub-expression up to a given precedence (which should usually
 -- be the precedence of the operator)
@@ -62,7 +62,7 @@ pPrint (BinOp l op r) =  PP.vcat [PP.text $ "(BinOp " ++ op,
                       PP.nest 4 $ pPrint l,
                       PP.nest 4 $ pPrint r, 
                       PP.text ")"]
-pPrint (IfThenElse c t f) =  PP.vcat [PP.text $ "(If",
+pPrint (IfThenElse c t f) =  PP.vcat [PP.text "(If",
                       PP.nest 4 $ pPrint c,
                       PP.nest 4 $ pPrint t,
                       PP.nest 4 $ pPrint f, 
@@ -70,7 +70,7 @@ pPrint (IfThenElse c t f) =  PP.vcat [PP.text $ "(If",
 pPrint x = PP.text $ show x
 
 parseToText :: ExprParser -> String -> String
-parseToText parser input = case (parse parser "input" input) of
+parseToText parser input = case parse parser "input" input of
        Left error -> show error
        Right expr -> PP.render $ pPrint expr
 
@@ -207,9 +207,11 @@ buildPrattParser operators strip operator nud  = parseExpr
 --------------------------------------------------------------------------------
 -- main - parse standard input
 --------------------------------------------------------------------------------
+parser :: ExprParser
+parser = buildPrattParser operatorList wsopt operator parseTerm
 
 main::IO()
 main = do
    input <- getContents
-   putStrLn (parseToText (buildPrattParser operatorList wsopt operator parseTerm) input)
+   putStrLn (parseToText parser input)
    
