@@ -49,7 +49,7 @@ type NullDenotation = PrecedenceParser -> ExprParser
 type LeftDenotation = OperatorInfo -> Expr -> PrecedenceParser -> ExprParser 
 -- type of parser transformers that can be used to remove extraneous text
 -- (eg removing whitespace and/or comments) before a useful token occurs
-type ContentStripper = forall t. StringParser t -> StringParser t
+type ContentStripper = StringParser ()
 
 type OperatorParser = StringParser String
 
@@ -80,11 +80,14 @@ parseToText parser input = case parse parser "input" input of
 
 -- apply optional trailing whitespace to a parser
 wsopt :: ContentStripper
-wsopt p = p <* optional spaces
+wsopt = optional spaces
 
 -- parse an integer value (with optional trailing whitespace)
 parseIntValue :: ExprParser 
-parseIntValue = wsopt (many1 digit) >>= \ x -> return (IntValue (read x))
+parseIntValue = do
+    x <- many1 digit
+    wsopt
+    return (IntValue (read x))
 
 -- parse an operator symbol
 operator :: OperatorParser
@@ -111,32 +114,12 @@ operatorList = [
 operatorInfoPrecedence :: OperatorInfo -> OperatorPrecedence
 operatorInfoPrecedence (OperatorInfo _ p _) = p
 
-operatorMap :: Map.Map String OperatorInfo
-operatorMap = Map.fromList (map mkOpInfoTuple operatorList)
-    where
-        mkOpInfoTuple opInfo@(OperatorInfo name _ _) = (name, opInfo)
-
-operatorPrecedence :: String -> OperatorPrecedence
-operatorPrecedence name = operatorInfoPrecedence (operatorMap ! name)
-
--- parse an operator only if the next operator has at least minimum precedence
--- (will usually be used with 'try', so error message caused on failure should 
--- never appear in output)
-operatorWithMinimumPrecedence :: Int -> StringParser String
-operatorWithMinimumPrecedence min = do
-    op <- wsopt operator
-    case operatorPrecedence op of
-        LAssoc precedence 
-           | precedence >= min -> return op
-        RAssoc precedence 
-           | precedence >= min -> return op
-        _                      -> fail "Precedence below minimum expected"
-
 
 -- parse <operator> <expression>
 parsePrefixOp :: NullDenotation
 parsePrefixOp pex = do
-    op <- wsopt operator
+    op <- operator
+    wsopt
     rhs <- parseTerm pex
     return $ PrefixOp op rhs
 
@@ -145,8 +128,8 @@ parseBracketExpr :: NullDenotation
 parseBracketExpr pex = between
     openBracket closeBracket
     (pex (LAssoc 0))
-    where openBracket = wsopt (char '(')
-          closeBracket = wsopt (char ')')
+    where openBracket = char '('
+          closeBracket = char ')'
 
 
 -- parse a binary operator with standard semantics
@@ -178,31 +161,53 @@ parseTerm pex =
 buildPrattParser :: [OperatorInfo] -> ContentStripper -> OperatorParser -> NullDenotation -> ExprParser
 buildPrattParser operators strip operator nud  = parseExpr
   where
-  parseExpr :: ExprParser
-  parseExpr = parseExprWithMinimumPrecedence (LAssoc 0)
+    parseExpr :: ExprParser
+    parseExpr = parseExprWithMinimumPrecedence (LAssoc 0) <* strip
 
-  parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
-  parseExprWithMinimumPrecedence precedence = 
-    optional spaces >> parseTerm parseExprWithMinimumPrecedence >>= parseInfix (precedenceValue precedence)
-    where
-        precedenceValue (LAssoc n) = n + 1
-        precedenceValue (RAssoc n) = n 
+    parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
+    parseExprWithMinimumPrecedence precedence = 
+        strip >> nud parseExprWithMinimumPrecedence <* strip >>= parseInfix (precedenceValue precedence)
+        where
+            precedenceValue (LAssoc n) = n + 1
+            precedenceValue (RAssoc n) = n 
  
-   -- given an already parsed expression, parse <operator> <expression> that may 
-  -- optionally follow it
-  parseInfix :: Int -> Expr -> ExprParser
-  parseInfix precedence lhs = do
-    maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
-    case maybeOp of
-        Just name       -> bindOperatorLeft name lhs >>= parseInfix precedence
-        Nothing         -> return lhs
+    -- given an already parsed expression, parse <operator> <expression> that may 
+    -- optionally follow it
+    parseInfix :: Int -> Expr -> ExprParser
+    parseInfix precedence lhs = do
+        maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
+        case maybeOp of
+            Just name       -> (bindOperatorLeft name lhs >>= parseInfix precedence) <* strip 
+            Nothing         -> return lhs
     
-  bindOperatorLeft :: String -> Expr -> ExprParser
-  bindOperatorLeft name lhs = 
-        case (Map.lookup name operatorMap) of
+    bindOperatorLeft :: String -> Expr -> ExprParser
+    bindOperatorLeft name lhs = 
+        case Map.lookup name operatorMap of
             Just opInfo@(OperatorInfo _ _ leftDenotation) -> 
                  leftDenotation opInfo lhs parseExprWithMinimumPrecedence
             Nothing -> error $ "Unknown operator \"" ++ name ++ "\""
+
+    operatorMap :: Map.Map String OperatorInfo
+    operatorMap = Map.fromList (map mkOpInfoTuple operators)
+        where
+            mkOpInfoTuple opInfo@(OperatorInfo name _ _) = (name, opInfo)
+    
+    operatorPrecedence :: String -> OperatorPrecedence
+    operatorPrecedence name = operatorInfoPrecedence (operatorMap ! name)
+    
+    -- parse an operator only if the next operator has at least minimum precedence
+    -- (will usually be used with 'try', so error message caused on failure should 
+    -- never appear in output)
+    operatorWithMinimumPrecedence :: Int -> StringParser String
+    operatorWithMinimumPrecedence min = do
+        op <- operator
+        strip
+        case operatorPrecedence op of
+            LAssoc precedence 
+               | precedence >= min -> return op
+            RAssoc precedence 
+               | precedence >= min -> return op
+            _                      -> fail "Precedence below minimum expected"
          
 --------------------------------------------------------------------------------
 -- main - parse standard input
