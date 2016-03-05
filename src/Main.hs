@@ -9,7 +9,8 @@ module Main where
 import Text.Parsec
 -- Applicative has several operators that conflict with the Parsec combinators, 
 -- but we want to be able to use <*, which Parsec lacks:
-import Control.Applicative ((<*))       
+import Control.Applicative ((<*))
+import Control.Monad       
 import qualified Text.PrettyPrint as PP
 import qualified Data.Map as Map
 import Data.Map ((!))
@@ -33,7 +34,7 @@ data OperatorPrecedence = LAssoc Int | RAssoc Int
                           deriving (Show, Eq)
 
 data OperatorInfo = OperatorInfo String OperatorPrecedence LeftDenotation
-                
+data PrefixOperatorInfo = PrefixOperatorInfo String PrefixBinder
 
 -- a NullDenotation is a parser for terms that do not have a left hand 
 -- term to bind to. It receives a parser as an argument that can be
@@ -41,6 +42,9 @@ data OperatorInfo = OperatorInfo String OperatorPrecedence LeftDenotation
 -- operator of a given precedence or greater is encountered
 type PrecedenceParser = OperatorPrecedence -> ExprParser
 type NullDenotation = PrecedenceParser -> ExprParser
+
+-- a PrefixBinder binds a prefix operator with the expression to its right
+type PrefixBinder = PrefixOperatorInfo -> Expr -> Expr
 
 -- a LeftDenotation is a function for producing a parser that binds to a 
 -- left hand term. It also receives a function for parsing additional 
@@ -111,17 +115,17 @@ operatorList = [
     OperatorInfo "^" (RAssoc 90) parseStdOp,
     OperatorInfo "ifTrue" (RAssoc 5) parseIfOp]
 
+prefixOperatorList :: [PrefixOperatorInfo]
+prefixOperatorList = [
+    PrefixOperatorInfo "-" bindPrefixOp,
+    PrefixOperatorInfo "!" bindPrefixOp]
+    
 operatorInfoPrecedence :: OperatorInfo -> OperatorPrecedence
 operatorInfoPrecedence (OperatorInfo _ p _) = p
 
-
--- parse <operator> <expression>
-parsePrefixOp :: NullDenotation
-parsePrefixOp pex = do
-    op <- operator
-    wsopt
-    rhs <- parseTerm pex
-    return $ PrefixOp op rhs
+-- bind a prefix operator to its right hand side
+bindPrefixOp :: PrefixBinder
+bindPrefixOp (PrefixOperatorInfo name _) rhs = PrefixOp name rhs
 
 -- parse '(' <expression> ')'
 parseBracketExpr :: NullDenotation
@@ -150,7 +154,6 @@ parseIfOp (OperatorInfo name precedence _) condition pex = do
 -- parse terms
 parseTerm :: NullDenotation
 parseTerm pex = 
-    parsePrefixOp pex <|>
     parseIntValue <|>
     parseBracketExpr pex
 
@@ -158,22 +161,40 @@ parseTerm pex =
 
  
  
-buildPrattParser :: [OperatorInfo] -> ContentStripper -> OperatorParser -> NullDenotation -> ExprParser
-buildPrattParser operators strip operator nud  = parseExpr
+buildPrattParser :: [OperatorInfo] -> [PrefixOperatorInfo] -> ContentStripper -> OperatorParser -> NullDenotation -> ExprParser
+buildPrattParser operators prefixOperators strip operator nud  = parseExpr
   where
     parseExpr :: ExprParser
-    parseExpr = parseExprWithMinimumPrecedence (LAssoc 0) <* strip
+    parseExpr = parseExprWithMinimumPrecedence (RAssoc 0) <* strip
 
     parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
     parseExprWithMinimumPrecedence precedence = 
-        strip >> nud parseExprWithMinimumPrecedence <* strip >>= parseInfix (precedenceValue precedence)
+        strip >> nudOrPrefixOp <* strip >>= parseInfix (precedenceValue precedence)
         where
             precedenceValue (LAssoc n) = n + 1
             precedenceValue (RAssoc n) = n 
  
+    -- parse prefix operators or pass on to null denotation
+    nudOrPrefixOp :: ExprParser
+    nudOrPrefixOp = parsePrefixOp <|> nud parseExprWithMinimumPrecedence
+ 
+    parsePrefixOp :: ExprParser
+    parsePrefixOp = do
+        op <- try (operator <* strip)
+        case Map.lookup op prefixOperatorMap of
+            Just opInfo@(PrefixOperatorInfo _ binder) -> do
+                rhs <- nudOrPrefixOp
+                return $ binder opInfo rhs
+            Nothing -> fail ("Operator " ++ op ++ " not allowed as a prefix")
+              
     -- given an already parsed expression, parse <operator> <expression> that may 
     -- optionally follow it
     parseInfix :: Int -> Expr -> ExprParser
+    parseInfix 0 lhs = do           -- if we're at base precedence level, all operators should be accepted, so we want errors
+                                    -- if they're not recognised.
+        op <- operatorWithMinimumPrecedence 0
+        bindOperatorLeft op lhs
+   
     parseInfix precedence lhs = do
         maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
         case maybeOp of
@@ -192,8 +213,14 @@ buildPrattParser operators strip operator nud  = parseExpr
         where
             mkOpInfoTuple opInfo@(OperatorInfo name _ _) = (name, opInfo)
     
-    operatorPrecedence :: String -> OperatorPrecedence
-    operatorPrecedence name = operatorInfoPrecedence (operatorMap ! name)
+    -- fixme: this seems to duplicate a lot of operatorMap. how do we remove this duplication?
+    prefixOperatorMap :: Map.Map String PrefixOperatorInfo
+    prefixOperatorMap = Map.fromList (map mkPrefixOpInfoTuple prefixOperators)
+        where
+            mkPrefixOpInfoTuple opInfo@(PrefixOperatorInfo name _) = (name, opInfo)
+            
+    operatorPrecedence :: String -> Maybe OperatorPrecedence
+    operatorPrecedence name = liftM operatorInfoPrecedence (Map.lookup name operatorMap)  
     
     -- parse an operator only if the next operator has at least minimum precedence
     -- (will usually be used with 'try', so error message caused on failure should 
@@ -203,17 +230,19 @@ buildPrattParser operators strip operator nud  = parseExpr
         op <- operator
         strip
         case operatorPrecedence op of
-            LAssoc precedence 
+            Just (LAssoc precedence) 
                | precedence >= min -> return op
-            RAssoc precedence 
+            Just (RAssoc precedence) 
                | precedence >= min -> return op
-            _                      -> fail "Precedence below minimum expected"
+            Just _                 -> fail "Precedence below minimum expected"
+            Nothing                -> fail $ "Illegal operator " ++ op
+            
          
 --------------------------------------------------------------------------------
 -- main - parse standard input
 --------------------------------------------------------------------------------
 parser :: ExprParser
-parser = buildPrattParser operatorList wsopt operator parseTerm
+parser = buildPrattParser operatorList prefixOperatorList wsopt operator parseTerm
 
 main::IO()
 main = do
