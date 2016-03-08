@@ -14,6 +14,7 @@ import Control.Monad
 import qualified Text.PrettyPrint as PP
 import qualified Data.Map as Map
 import Data.Map ((!))
+import Data.Maybe
 import Text.Show.Functions          -- for debugging purposes only
 
 --------------------------------------------------------------------------------
@@ -56,6 +57,17 @@ type LeftDenotation = OperatorInfo -> Expr -> PrecedenceParser -> ExprParser
 type ContentStripper = StringParser ()
 
 type OperatorParser = StringParser String
+
+--------------------------------------------------------------------------------
+-- Type manipulation utilities
+--------------------------------------------------------------------------------
+    
+operatorInfoPrecedence :: OperatorInfo -> OperatorPrecedence
+operatorInfoPrecedence (OperatorInfo _ p _) = p
+operatorInfoName :: OperatorInfo -> String
+operatorInfoName (OperatorInfo n _ _) = n
+prefixOperatorInfoName :: PrefixOperatorInfo -> String
+prefixOperatorInfoName (PrefixOperatorInfo n _) = n
 
 --------------------------------------------------------------------------------
 -- utility functions for formatted output
@@ -119,9 +131,6 @@ prefixOperatorList :: [PrefixOperatorInfo]
 prefixOperatorList = [
     PrefixOperatorInfo "-" bindPrefixOp,
     PrefixOperatorInfo "!" bindPrefixOp]
-    
-operatorInfoPrecedence :: OperatorInfo -> OperatorPrecedence
-operatorInfoPrecedence (OperatorInfo _ p _) = p
 
 -- bind a prefix operator to its right hand side
 bindPrefixOp :: PrefixBinder
@@ -169,7 +178,11 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
 
     parseExprWithMinimumPrecedence :: OperatorPrecedence -> ExprParser
     parseExprWithMinimumPrecedence precedence = 
-        strip >> nudOrPrefixOp <* strip >>= parseInfix (precedenceValue precedence)
+        do
+            strip 
+            term <- nudOrPrefixOp 
+            strip 
+            parseInfix (precedenceValue precedence) term
         where
             precedenceValue (LAssoc n) = n + 1
             precedenceValue (RAssoc n) = n 
@@ -190,16 +203,16 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
     -- given an already parsed expression, parse <operator> <expression> that may 
     -- optionally follow it
     parseInfix :: Int -> Expr -> ExprParser
-    parseInfix 0 lhs = do           -- if we're at base precedence level, all operators should be accepted, so we want errors
-                                    -- if they're not recognised.
-        op <- operatorWithMinimumPrecedence 0
-        bindOperatorLeft op lhs
-   
     parseInfix precedence lhs = do
-        maybeOp <- optionMaybe (try (operatorWithMinimumPrecedence precedence))
+        maybeOp <- optionMaybe (try $ nextOperator precedence)
         case maybeOp of
             Just name       -> (bindOperatorLeft name lhs >>= parseInfix precedence) <* strip 
             Nothing         -> return lhs
+        where 
+            -- if we're at base precedence level, all operators should be accepted, so we want errors if they're not recognised.
+            nextOperator 0 = operator
+            -- otherwise, we only accept operators with precedence equal to or higher than the current precedence
+            nextOperator precedence = operatorWithMinimumPrecedence precedence
     
     bindOperatorLeft :: String -> Expr -> ExprParser
     bindOperatorLeft name lhs = 
@@ -209,15 +222,13 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
             Nothing -> error $ "Unknown operator \"" ++ name ++ "\""
 
     operatorMap :: Map.Map String OperatorInfo
-    operatorMap = Map.fromList (map mkOpInfoTuple operators)
-        where
-            mkOpInfoTuple opInfo@(OperatorInfo name _ _) = (name, opInfo)
+    operatorMap = mapFrom operatorInfoName operatorList
+
+    mapFrom :: Ord k => (v -> k) -> [v] -> Map.Map k v
+    mapFrom getKey values = Map.fromList (map (\x -> (getKey x, x)) values)
     
-    -- fixme: this seems to duplicate a lot of operatorMap. how do we remove this duplication?
     prefixOperatorMap :: Map.Map String PrefixOperatorInfo
-    prefixOperatorMap = Map.fromList (map mkPrefixOpInfoTuple prefixOperators)
-        where
-            mkPrefixOpInfoTuple opInfo@(PrefixOperatorInfo name _) = (name, opInfo)
+    prefixOperatorMap = mapFrom prefixOperatorInfoName prefixOperatorList
             
     operatorPrecedence :: String -> Maybe OperatorPrecedence
     operatorPrecedence name = liftM operatorInfoPrecedence (Map.lookup name operatorMap)  
