@@ -125,7 +125,7 @@ operatorInfoPrecedence (OperatorInfo _ p _) = p
 
 -- bind a prefix operator to its right hand side
 bindPrefixOp :: PrefixBinder
-bindPrefixOp (PrefixOperatorInfo name _) rhs = PrefixOp name rhs
+bindPrefixOp (PrefixOperatorInfo name _) = PrefixOp name
 
 -- parse '(' <expression> ')'
 parseBracketExpr :: NullDenotation
