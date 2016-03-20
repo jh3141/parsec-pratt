@@ -7,7 +7,8 @@ module Main where
 import Text.Parsec
 import Text.Parsec.PrattParser
 import qualified Text.PrettyPrint as PP
-
+import Control.Monad.Identity
+    
 --------------------------------------------------------------------------------
 -- basic data types
 --------------------------------------------------------------------------------
@@ -19,7 +20,7 @@ data Expr =
     IfThenElse Expr Expr Expr
     deriving Show
     
-type ExprParser = StringParser Expr
+type ExprParser = Parsec String () Expr
 
 --------------------------------------------------------------------------------
 -- utility functions for formatted output
@@ -47,7 +48,7 @@ parseToText parser input = case parse parser "input" input of
 --------------------------------------------------------------------------------       
 
 -- apply optional trailing whitespace to a parser
-wsopt :: ContentStripper
+wsopt :: ContentStripper String () Identity ()
 wsopt = optional spaces
 
 -- parse an integer value (with optional trailing whitespace)
@@ -58,11 +59,11 @@ parseIntValue = do
     return (IntValue (read x))
 
 -- parse an operator symbol
-operator :: OperatorParser
+operator :: OperatorParser String () Identity String
 operator = try (string "ifTrue") <|> many1 (oneOf "<>:@~\\/|!Â£$%^&*-_=+")
 
 -- operator data
-operatorList :: [OperatorInfo Expr]
+operatorList :: [OperatorInfo String () Identity Expr String]
 operatorList = [
     OperatorInfo "-" (LAssoc 50) parseStdOp,
     OperatorInfo "+" (LAssoc 50) parseStdOp,
@@ -79,17 +80,17 @@ operatorList = [
     OperatorInfo "^" (RAssoc 90) parseStdOp,
     OperatorInfo "ifTrue" (RAssoc 5) parseIfOp]
 
-prefixOperatorList :: [PrefixOperatorInfo Expr]
+prefixOperatorList :: [PrefixOperatorInfo Expr String]
 prefixOperatorList = [
     PrefixOperatorInfo "-" bindPrefixOp,
     PrefixOperatorInfo "!" bindPrefixOp]
 
 -- bind a prefix operator to its right hand side
-bindPrefixOp :: PrefixBinder Expr
+bindPrefixOp :: PrefixBinder Expr String
 bindPrefixOp (PrefixOperatorInfo name _) = PrefixOp name
 
 -- parse '(' <expression> ')'
-parseBracketExpr :: NullDenotation Expr
+parseBracketExpr :: NullDenotation String () Identity Expr
 parseBracketExpr pex = between
     openBracket closeBracket
     (pex (LAssoc 0))
@@ -98,13 +99,13 @@ parseBracketExpr pex = between
 
 
 -- parse a binary operator with standard semantics
-parseStdOp :: LeftDenotation Expr
+parseStdOp :: LeftDenotation String () Identity Expr String
 parseStdOp (OperatorInfo name precedence _) lhs pex = do
     rhs <- pex precedence
     return (BinOp lhs name rhs)
 
 -- parse an if-then-else operator
-parseIfOp :: LeftDenotation Expr
+parseIfOp :: LeftDenotation String () Identity Expr String
 parseIfOp (OperatorInfo name precedence _) condition pex = do
     trueExpr <- pex precedence
     string "else"
@@ -112,7 +113,7 @@ parseIfOp (OperatorInfo name precedence _) condition pex = do
     return $ IfThenElse condition trueExpr falseExpr
     
 -- parse terms
-parseTerm :: NullDenotation Expr
+parseTerm :: NullDenotation String () Identity Expr
 parseTerm pex = 
     parseIntValue <|>
     parseBracketExpr pex

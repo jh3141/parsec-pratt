@@ -1,29 +1,34 @@
 name:           parsec-pratt
 version:        0.1
-cabal-version:  >= 1.2
+cabal-version:  >= 1.18
 build-type:     Simple
 author:         Julian Hall
-tested-with:    GHC==7.10.2
+tested-with:    GHC==7.10.3
 synopsis:       Pratt Parser (aka Top Down Operator Precedence Parser) combinator for Parsec
 category:       Text
 
 executable parsec-pratt-example
-  hs-source-dirs:  src
+  default-language: Haskell2010
+  hs-source-dirs:  example
   main-is:         Main.hs
   build-depends:   
                    base >= 4,
                    parsec >= 3.1 && < 4,
                    containers >= 0.5.6.2 && < 0.6,
-                   pretty >=1.1 && <1.2
+                   pretty >=1.1 && <1.2,
+                   mtl >= 2,
+                   parsec-pratt
   ghc-options:     -Wall
-  other-modules:   Text.Parsec.PrattParser
+
 
 library 
+  default-language: Haskell2010
   build-depends:   
                    base >= 4,
                    parsec >=3.1 && < 4,
                    containers >= 0.5.6.2 && < 0.6
   hs-source-dirs:  src
-  ghc-options:     -Wall
+  ghc-options:     -Wall -fno-warn-unused-do-bind
   exposed-modules: Text.Parsec.PrattParser
+
 
