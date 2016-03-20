@@ -2,22 +2,19 @@
 
 module Text.Parsec.PrattParser where
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- dependencies
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 import Text.Parsec
--- Applicative has several operators that conflict with the Parsec combinators, 
--- but we want to be able to use <*, which Parsec lacks:
-import Control.Applicative ((<*))
 import Control.Monad       
 import qualified Data.Map as Map
 import Data.Map ((!))
 import Data.Maybe
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- basic data types
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 type StringParser r = Parsec String () r
 
@@ -41,7 +38,8 @@ type PrefixBinder e = PrefixOperatorInfo e -> e -> e
 -- left hand term. It also receives a function for parsing additional 
 -- sub-expression up to a given precedence (which should usually
 -- be the precedence of the operator)
-type LeftDenotation e = OperatorInfo e -> e -> PrecedenceParser e -> StringParser e
+type LeftDenotation e = OperatorInfo e -> e -> PrecedenceParser e ->
+                        StringParser e
  
 -- type of parser transformers that can be used to remove extraneous text
 -- (eg removing whitespace and/or comments) before a useful token occurs
@@ -49,9 +47,9 @@ type ContentStripper = StringParser ()
 
 type OperatorParser = StringParser String
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- Type manipulation utilities
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
     
 operatorInfoPrecedence :: OperatorInfo e -> OperatorPrecedence
 operatorInfoPrecedence (OperatorInfo _ p _) = p
@@ -61,7 +59,10 @@ prefixOperatorInfoName :: PrefixOperatorInfo e -> String
 prefixOperatorInfoName (PrefixOperatorInfo n _) = n
 
 
-buildPrattParser :: forall e . [OperatorInfo e] -> [PrefixOperatorInfo e] -> ContentStripper -> OperatorParser -> NullDenotation e -> StringParser e
+buildPrattParser :: forall e .
+                    [OperatorInfo e] -> [PrefixOperatorInfo e]
+                 -> ContentStripper -> OperatorParser -> NullDenotation e
+                 -> StringParser e
 buildPrattParser operators prefixOperators strip operator nud  = parseExpr
   where
     parseExpr :: StringParser e
@@ -91,18 +92,21 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
                 return $ binder opInfo rhs
             Nothing -> fail ("Operator " ++ op ++ " not allowed as a prefix")
               
-    -- given an already parsed expression, parse <operator> <expression> that may 
-    -- optionally follow it
+    -- given an already parsed expression, parse <operator> <expression> that  
+    -- may optionally follow it
     parseInfix :: Int -> e -> StringParser e
     parseInfix precedence lhs = do
         maybeOp <- optionMaybe (try $ nextOperator precedence)
         case maybeOp of
-            Just name       -> (bindOperatorLeft name lhs >>= parseInfix precedence) <* strip 
-            Nothing         -> return lhs
+            Just name -> (bindOperatorLeft name lhs >>= parseInfix precedence)
+                            <* strip 
+            Nothing   -> return lhs
         where 
-            -- if we're at base precedence level, all operators should be accepted, so we want errors if they're not recognised.
+            -- if we're at base precedence level, all operators should be
+            -- accepted, so we want errors if they're not recognised.
             nextOperator 0 = operator
-            -- otherwise, we only accept operators with precedence equal to or higher than the current precedence
+            -- otherwise, we only accept operators with precedence equal to
+            -- or higher than the current precedence
             nextOperator precedence = operatorWithMinimumPrecedence precedence
     
     bindOperatorLeft :: String -> e -> StringParser e
@@ -122,11 +126,12 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
     prefixOperatorMap = mapFrom prefixOperatorInfoName prefixOperators
             
     operatorPrecedence :: String -> Maybe OperatorPrecedence
-    operatorPrecedence name = liftM operatorInfoPrecedence (Map.lookup name operatorMap)  
+    operatorPrecedence name = liftM operatorInfoPrecedence
+                                    (Map.lookup name operatorMap)  
     
-    -- parse an operator only if the next operator has at least minimum precedence
-    -- (will usually be used with 'try', so error message caused on failure should 
-    -- never appear in output)
+    -- parse an operator only if the next operator has at least minimum
+    -- precedence (will usually be used with 'try', so error message caused
+    -- on failure should never appear in output)
     operatorWithMinimumPrecedence :: Int -> StringParser String
     operatorWithMinimumPrecedence min = do
         op <- operator
