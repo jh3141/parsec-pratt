@@ -1,30 +1,32 @@
 module Main where
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- dependencies
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 import Text.Parsec
 import Text.Parsec.PrattParser
 import qualified Text.PrettyPrint as PP
 import Control.Monad.Identity
     
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- basic data types
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 data Expr =
     BinOp Expr String Expr |
     PrefixOp String Expr |
     IntValue Integer |
-    IfThenElse Expr Expr Expr
+    IfThenElse Expr Expr Expr |
+    LetExpr String Expr Expr |
+    VarRef String
     deriving Show
     
 type ExprParser = Parsec String () Expr
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- utility functions for formatted output
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 pPrint :: Expr -> PP.Doc
 pPrint (BinOp l op r) =  PP.vcat [PP.text $ "(BinOp " ++ op,
@@ -36,6 +38,11 @@ pPrint (IfThenElse c t f) =  PP.vcat [PP.text "(If",
                       PP.nest 4 $ pPrint t,
                       PP.nest 4 $ pPrint f, 
                       PP.text ")"]
+pPrint (LetExpr n v e) =  PP.vcat [PP.text $ "(Let " ++ (show n) ++ " = ",
+                      PP.nest 4 $ pPrint v,
+                      PP.nest 1 $ PP.text "in",
+                      PP.nest 4 $ pPrint e, 
+                      PP.text ")"]
 pPrint x = PP.text $ show x
 
 parseToText :: ExprParser -> String -> String
@@ -43,9 +50,9 @@ parseToText parser input = case parse parser "input" input of
        Left error -> show error
        Right expr -> PP.render $ pPrint expr
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- parser definitions
---------------------------------------------------------------------------------       
+------------------------------------------------------------------------------
 
 -- apply optional trailing whitespace to a parser
 wsopt :: ContentStripper String () Identity ()
@@ -60,7 +67,8 @@ parseIntValue = do
 
 -- parse an operator symbol
 operator :: OperatorParser String () Identity String
-operator = try (string "ifTrue") <|> many1 (oneOf "<>:@~\\/|!Â£$%^&*-_=+")
+operator = try (string "ifTrue") <|> many1 (oneOf "<>:@~\\/|!$%^&*-_=+")
+           <|> string "(" <|> try (string "let")
 
 -- operator data
 operatorList :: [OperatorInfo String () Identity Expr String]
@@ -80,15 +88,28 @@ operatorList = [
     OperatorInfo "^" (RAssoc 90) parseStdOp,
     OperatorInfo "ifTrue" (RAssoc 5) parseIfOp]
 
-prefixOperatorList :: [PrefixOperatorInfo Expr String]
+prefixOperatorList :: [PrefixOperatorInfo String () Identity Expr String]
 prefixOperatorList = [
-    PrefixOperatorInfo "-" bindPrefixOp,
-    PrefixOperatorInfo "!" bindPrefixOp]
+    SimplePrefixOperator "-" bindPrefixOp,
+    SimplePrefixOperator "!" bindPrefixOp,
+    PrefixParserOperator "let" parseLetOp]
 
 -- bind a prefix operator to its right hand side
-bindPrefixOp :: PrefixBinder Expr String
-bindPrefixOp (PrefixOperatorInfo name _) = PrefixOp name
+bindPrefixOp :: PrefixBinder String () Identity Expr String
+bindPrefixOp (SimplePrefixOperator name _) = PrefixOp name
 
+-- parse 'let' <identifier> '=' <expression> 'in' <expression>
+-- (where 'let' has already been parsed for us!)
+parseLetOp :: NullDenotation String () Identity Expr
+parseLetOp pex = do
+    wsopt
+    identifier <- many1 letter
+    wsopt >> char '=' >> wsopt
+    valueExpr <- pex (LAssoc 0)
+    wsopt >> string "in" >> wsopt
+    inExpr <- pex (LAssoc 0)
+    return $ LetExpr identifier valueExpr inExpr
+           
 -- parse '(' <expression> ')'
 parseBracketExpr :: NullDenotation String () Identity Expr
 parseBracketExpr pex = between
@@ -111,18 +132,26 @@ parseIfOp (OperatorInfo name precedence _) condition pex = do
     string "else"
     falseExpr <- pex precedence
     return $ IfThenElse condition trueExpr falseExpr
-    
+
+-- parse variable reference
+parseVarRef :: ExprParser
+parseVarRef = VarRef <$> many1 letter
+              
 -- parse terms
 parseTerm :: NullDenotation String () Identity Expr
 parseTerm pex = 
     parseIntValue <|>
+    parseVarRef <|>
     parseBracketExpr pex
 
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 -- main - parse standard input
---------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 parser :: ExprParser
-parser = buildPrattParser operatorList prefixOperatorList wsopt operator parseTerm
+parser =
+    buildPrattParser
+         operatorList prefixOperatorList
+         wsopt operator parseTerm
 
 main::IO()
 main = do

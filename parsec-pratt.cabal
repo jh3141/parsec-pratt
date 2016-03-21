@@ -1,5 +1,5 @@
 name:           parsec-pratt
-version:        0.1
+version:        0.1.1
 cabal-version:  >= 1.18
 build-type:     Simple
 author:         Julian Hall

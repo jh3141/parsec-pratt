@@ -36,7 +36,9 @@ data OperatorPrecedence = LAssoc Int | RAssoc Int
                                    
 data OperatorInfo s u m e o = OperatorInfo o OperatorPrecedence
                                            (LeftDenotation s u m e o)
-data PrefixOperatorInfo e o = PrefixOperatorInfo o (PrefixBinder e o)
+data PrefixOperatorInfo s u m e o =
+       SimplePrefixOperator o (PrefixBinder s u m e o) |
+       PrefixParserOperator o (NullDenotation s u m e)
 
 -- a NullDenotation is a parser for terms that do not have a left hand 
 -- term to bind to. It receives a parser as an argument that can be
@@ -46,7 +48,7 @@ type PrecedenceParser s u m e = OperatorPrecedence -> ParsecT s u m e
 type NullDenotation s u m e = PrecedenceParser s u m e -> ParsecT s u m e
 
 -- a PrefixBinder binds a prefix operator with the expression to its right
-type PrefixBinder e o = PrefixOperatorInfo e o -> e -> e
+type PrefixBinder s u m e o = PrefixOperatorInfo s u m e o -> e -> e
 
 -- a LeftDenotation is a function for producing a parser that binds to a 
 -- left hand term. It also receives a function for parsing additional 
@@ -72,9 +74,9 @@ operatorInfoPrecedence (OperatorInfo _ p _) = p
 operatorInfoName :: OperatorInfo s u m e o -> o
 operatorInfoName (OperatorInfo n _ _) = n
                                         
-prefixOperatorInfoName :: PrefixOperatorInfo e o -> o
-prefixOperatorInfoName (PrefixOperatorInfo n _) = n
-
+prefixOperatorInfoName :: PrefixOperatorInfo s u m e o -> o
+prefixOperatorInfoName (SimplePrefixOperator n _) = n
+prefixOperatorInfoName (PrefixParserOperator n _) = n
 
 buildPrattParser :: forall s u m e o t a .
                     Stream s m t =>
@@ -83,7 +85,7 @@ buildPrattParser :: forall s u m e o t a .
                     Ord o =>
                     Show o =>
                     [OperatorInfo s u m e o]
-                 -> [PrefixOperatorInfo e o]
+                 -> [PrefixOperatorInfo s u m e o]
                  -> ContentStripper s u m a
                  -> OperatorParser s u m o
                  -> NullDenotation s u m e
@@ -106,17 +108,23 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
  
     -- parse prefix operators or pass on to null denotation
     nudOrPrefixOp :: ParsecT s u m e
-    nudOrPrefixOp = parsePrefixOp <|> nud parseExprWithMinimumPrecedence
+    nudOrPrefixOp = try parsePrefixOp <|> nud parseExprWithMinimumPrecedence
  
     parsePrefixOp :: ParsecT s u m e
     parsePrefixOp = do
         op <- try (operator <* strip)
         case Map.lookup op prefixOperatorMap of
-            Just opInfo@(PrefixOperatorInfo _ binder) -> do
+          
+            Just opInfo@(SimplePrefixOperator _ binder) -> do
                 rhs <- nudOrPrefixOp
                 return $ binder opInfo rhs
-            Nothing -> fail ("Operator '" ++ (show op) ++
-                                              "' not allowed as a prefix")
+                       
+            Just (PrefixParserOperator _ pnud) ->
+                pnud parseExprWithMinimumPrecedence
+                
+            Nothing ->
+                fail ("Operator " ++ (show op) ++
+                                              " not allowed as a prefix")
               
     -- given an already parsed expression, parse <operator> <expression> that  
     -- may optionally follow it
@@ -148,7 +156,7 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
     mapFrom :: Ord k => (v -> k) -> [v] -> Map.Map k v
     mapFrom getKey values = Map.fromList (map (\x -> (getKey x, x)) values)
     
-    prefixOperatorMap :: Map.Map o (PrefixOperatorInfo e o)
+    prefixOperatorMap :: Map.Map o (PrefixOperatorInfo s u m e o)
     prefixOperatorMap = mapFrom prefixOperatorInfoName prefixOperators
             
     operatorPrecedence :: o -> Maybe OperatorPrecedence
