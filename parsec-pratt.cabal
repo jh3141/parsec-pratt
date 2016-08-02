@@ -5,6 +5,7 @@ build-type:     Simple
 author:         Julian Hall
 tested-with:    GHC==7.10.3
 synopsis:       Pratt Parser (aka Top Down Operator Precedence Parser) combinator for Parsec
+license:        MIT
 category:       Text
 
 executable parsec-pratt-example
