@@ -3,6 +3,7 @@ version:        0.1.1
 cabal-version:  >= 1.18
 build-type:     Simple
 author:         Julian Hall
+homepage:       http://github.com/jh3141/parsec-pratt/
 tested-with:    GHC==7.10.3
 synopsis:       Pratt Parser (aka Top Down Operator Precedence Parser) combinator for Parsec
 license:        MIT
