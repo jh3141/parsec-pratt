@@ -24,7 +24,10 @@
 --   - Monad m
 --   - Ord o
 --   - Show o
- 
+--
+-- Note that version 0.2.0 introduces a backwards incompatibility in the type of
+-- prefix binders, which now return 'm e' rather than 'e' as previously.
+
 module Text.Parsec.PrattParser where
 
 ------------------------------------------------------------------------------
@@ -32,7 +35,8 @@ module Text.Parsec.PrattParser where
 ------------------------------------------------------------------------------
 
 import Text.Parsec
-import Control.Monad       
+import Control.Monad
+import Control.Monad.Trans
 import qualified Data.Map as Map
 
 ------------------------------------------------------------------------------
@@ -69,7 +73,7 @@ type PrecedenceParser s u m e = OperatorPrecedence -> ParsecT s u m e
 type NullDenotation s u m e = PrecedenceParser s u m e -> ParsecT s u m e
 
 -- | a PrefixBinder binds a prefix operator with the expression to its right
-type PrefixBinder s u m e o = PrefixOperatorInfo s u m e o -> e -> e
+type PrefixBinder s u m e o = PrefixOperatorInfo s u m e o -> e -> m e
 
 -- | a LeftDenotation is a function for producing a parser that binds to a 
 -- left hand term. Its arguments are:
@@ -161,7 +165,7 @@ buildPrattParser operators prefixOperators strip operator nud  = parseExpr
           
             Just opInfo@(SimplePrefixOperator _ binder) -> do
                 rhs <- nudOrPrefixOp
-                return $ binder opInfo rhs
+                lift $ binder opInfo rhs
                        
             Just (PrefixParserOperator _ pnud) ->
                 pnud parseExprWithMinimumPrecedence

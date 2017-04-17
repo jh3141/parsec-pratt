@@ -96,7 +96,7 @@ prefixOperatorList = [
 
 -- bind a prefix operator to its right hand side
 bindPrefixOp :: PrefixBinder String () Identity Expr String
-bindPrefixOp (SimplePrefixOperator name _) = PrefixOp name
+bindPrefixOp (SimplePrefixOperator name _) = return . PrefixOp name
 
 -- parse 'let' <identifier> '=' <expression> 'in' <expression>
 -- (where 'let' has already been parsed for us!)
